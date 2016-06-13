@@ -8,6 +8,8 @@ class NIBoard(IntermediateDevice):
     allowed_children = [AnalogOut, DigitalOut, AnalogIn]
     n_analogs = 4
     n_digitals = 32
+    n_ports = 4
+    n_lines = 8
     digital_dtype = np.uint32
     clock_limit = 500e3 # underestimate I think.
     description = 'generic_NI_Board'
@@ -34,9 +36,7 @@ class NIBoard(IntermediateDevice):
         for output in digitals:
             port, line = output.connection.replace('port','').replace('line','').split('/')
             port, line  = int(port),int(line)
-            if port > 0:
-                raise LabscriptError('Ports > 0 on NI Boards not implemented. Please use port 0, or file a feature request at redmine.physics.monash.edu.au/labscript.')
-            outputarray[line] = output.raw_output
+            outputarray[self.n_lines*port+line] = output.raw_output
         bits = bitfield(outputarray,dtype=self.digital_dtype)
         return bits
             
@@ -98,7 +98,13 @@ class NIBoard(IntermediateDevice):
             self.set_property('analog_out_channels', ', '.join(analog_out_attrs), location='device_properties')
         if len(digital_out_table): # Table must be non empty
             grp.create_dataset('DIGITAL_OUTS',compression=config.compression,data=digital_out_table)
-            self.set_property('digital_lines', '/'.join((self.MAX_name,'port0','line0:%d'%(self.n_digitals-1))), location='device_properties')
+            # construct a single string that has each port and line distribution separated by commas
+            # this should coincide with the convention used by the create/write functions in the DAQmx library
+            ports_str = ""
+            for i in range(self.n_ports):
+              ports_str = ports_str+self.MAX_name+'/port%d'%(i)+'/line0:%d'%(self.n_lines-1)+','
+            ports_str = ports_str[:-1] # delete final comma in string
+            self.set_property('digital_lines',(ports_str),location='device_properties')
         if len(acquisition_table): # Table must be non empty
             grp.create_dataset('ACQUISITIONS',compression=config.compression,data=acquisition_table)
             self.set_property('analog_in_channels', ', '.join(input_attrs), location='device_properties')
@@ -109,6 +115,8 @@ class NIBoard(IntermediateDevice):
 @runviewer_parser
 class RunviewerClass(object):
     num_digitals = 32
+    num_ports = 4
+    num_lines = 8
     
     def __init__(self, path, device):
         self.path = path
@@ -119,8 +127,11 @@ class RunviewerClass(object):
         # This saves having to evaluate '%d'%i many many times, and makes the _add_pulse_program_row_to_traces method
         # significantly more efficient
         self.port_strings = {} 
-        for i in range(self.num_digitals):
-            self.port_strings[i] = 'port0/line%d'%i
+        k = 0
+        for i in range(self.num_ports):
+          for j in range(self.num_lines):
+            self.port_strings[k] = 'port%d/line%d'%(i,j)
+            k += 1
             
     def get_traces(self, add_trace, clock=None):
         if clock is None:
@@ -151,8 +162,9 @@ class RunviewerClass(object):
         clock_ticks = times[clock_indices]
         
         traces = {}
-        for i in range(self.num_digitals):
-            traces['port0/line%d'%i] = []
+        for i in range(self.num_ports):
+          for j in range(self.num_lines):
+            traces['port%d/line%d'%(i,j)] = []
         for row in digitals:
             bit_string = np.binary_repr(row,self.num_digitals)[::-1]
             for i in range(self.num_digitals):
